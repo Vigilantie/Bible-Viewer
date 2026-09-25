@@ -8,12 +8,14 @@ learn about the Bible.
 
 Please enjoy. God Bless.
 
+![Bible-Viewer-macOS.png](./docs/Screenshots/Bible-Viewer-macOS.png)
+
 ## Get the Project
 
 Open your terminal (or Command Prompt if you are on Windows), and type:
 
 ```bash
-git clone --recursive https://github.com/Vigilantie/Bible-Viewer
+git clone https://github.com/Vigilantie/Bible-Viewer
 cd Bible_Viewer
 ```
 
