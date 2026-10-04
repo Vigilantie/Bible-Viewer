@@ -17,5 +17,8 @@ parse_bible:
 	clang -c external/cJSON/cJSON.c -o build/tests/o/cJSON.o
 	clang++ build/tests/o/parse.o build/tests/o/temp.o build/tests/o/cJSON.o -o build/tests/parse_bible
 
+highlight:
+	clang++ ../src/core/util.cpp ../src/core/highlight.cpp highlightTests.cpp -I../include -lsqlite3 -std=c++17
+
 clean:
 	rm -r build/tests
