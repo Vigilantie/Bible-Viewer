@@ -21,3 +21,4 @@
 std::string lowerCase(std::string str);
 int bookToIndex(std::string book);
 std::string indexToBook(int index);
+std::string pathToAssetsDir(const std::string &file_inside_dir);

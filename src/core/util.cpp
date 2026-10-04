@@ -332,3 +332,56 @@ std::string indexToBook(int index)
 
   return books[index];
 }
+
+#include <filesystem>
+namespace fs = std::filesystem;
+
+std::string pathToAssetsDir(const std::string &file_inside_dir = "")
+{
+  static std::string cached_path;
+  if (!cached_path.empty()) {
+    return cached_path;
+  }
+
+  std::string base;
+#ifdef _WIN32
+  base = std::getenv("APPDATA");
+  if (base.empty()) {
+    std::string user_profile = std::getenv("USERPROFILE");
+    if (!user_profile.empty()) {
+      base = (fs::path(user_profile) / "AppData" / "Roaming").string();
+    }
+  }
+#elif defined(__APPLE__)
+  std::string home = std::getenv("HOME");
+  if (!home.empty()) {
+    base = (fs::path(home) / "Library" / "Application Support").string();
+  }
+#else
+  base = std::getenv("XDG_DATA_HOME");
+  if (base.empty()) {
+    std::string home = std::getenv("HOME");
+    if (!home.empty()) {
+      base = (fs::path(home) / ".local" / "share").string();
+    }
+  }
+#endif
+
+  if (base.empty()) {
+    base = ".";
+  }
+  if (file_inside_dir != "")
+  {
+    cached_path = (fs::path(base) / "Bible-Viewer" / file_inside_dir).string();
+  }
+  else
+  {
+    cached_path = (fs::path(base) / "Bible-Viewer").string();
+  }
+
+  if (fs::create_directories(cached_path) == 0)
+  {
+    printf("Error creating the app's support dir\n");
+  }
+  return cached_path;
+}

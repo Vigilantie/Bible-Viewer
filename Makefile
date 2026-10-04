@@ -14,12 +14,6 @@ else
   PLATFORM := unknown
 endif
 
-ifeq ($(PLATFORM),macos)
-  CMAKE_GENERATOR := -G Xcode
-else
-  CMAKE_GENERATOR :=
-endif
-
 .PHONY: all library debug debug-lib release release-lib
 
 all: release
@@ -37,7 +31,7 @@ endif
 
 debug-lib:
 ifeq ($(PLATFORM),macos)
-	cmake -S . -B $(DEBUG_DIR) -G Xcode -DGUI=OFF
+	cmake -S . -B $(DEBUG_DIR) -DGUI=OFF
 	cmake --build $(DEBUG_DIR) --config Debug
 else
 	cmake -S . -B $(DEBUG_DIR) -DCMAKE_BUILD_TYPE=Debug -DGUI=OFF

@@ -3,3 +3,4 @@
 *.ini
 build/
 .cache/
+*/a.out
