@@ -14,178 +14,118 @@
   GNU General Public License for more details.
 */
 
-#include <string>
-#include <vector>
+#include "highlight.hpp"
+#include <algorithm>
 
-#include <sqlite3.h>
-
-#include <highlight.hpp>
-#include <util.hpp>
-
-HighlightDB::HighlightDB(std::string db_path)
+HighlightDB::HighlightDB(std::string path)
 {
-  int rc = sqlite3_open(db_path.c_str(), &db);
-  if (rc != SQLITE_OK)
+  if (sqlite3_open(path.c_str(), &db) != SQLITE_OK)
   {
-    fprintf(stderr, "Failed to open database: %s\n", sqlite3_errmsg(db));
-
-    sqlite3_close(db);
+    error = sqlite3_errmsg(db);
     return;
   }
-
-  const char *sql =
-    "CREATE TABLE IF NOT EXISTS Highlights ("
-    "id INTEGER PRIMARY KEY,"
-    "book TEXT NOT NULL,"
-    "chapter INTEGER NOT NULL,"
-    "verse INTEGER NOT NULL,"
-    "start_index INTEGER NOT NULL,"
-    "end_index INTEGER NOT NULL,"
-    "color INTEGER NOT NULL"
-    ");"
-  ;
-
-  char *error = NULL;
-  rc = sqlite3_exec(db, sql, NULL, NULL, &error);
-  if (rc != SQLITE_OK)
+  const char *sql = "CREATE TABLE IF NOT EXISTS Highlights (id INTEGER PRIMARY KEY, book TEXT NOT NULL, chapter INTEGER NOT NULL, verse INTEGER NOT NULL, start_index INTEGER NOT NULL, end_index INTEGER NOT NULL, color INTEGER NOT NULL);";
+  if (sqlite3_exec(db, sql, nullptr, nullptr, nullptr) != SQLITE_OK)
   {
-    fprintf(stderr, "SQL error: %s\n", error);
-    sqlite3_free(error);
+    error = sqlite3_errmsg(db);
   }
 }
 
 HighlightDB::~HighlightDB()
 {
-  sqlite3_finalize(stmt);
-  sqlite3_close(db);
+  sqlite3_finalize(stmt); sqlite3_close(db);
 }
 
-void HighlightDB::save(const Highlight &highlight)
+static void bindHighlight(sqlite3_stmt *stmt, const Highlight &h)
 {
-  sqlite3_finalize(stmt);
-  stmt = nullptr;
-
-  const char *sql =
-    "INSERT INTO Highlights "
-    "(book, chapter, verse, start_index, end_index, color) "
-    "VALUES (?, ?, ?, ?, ?, ?);"
-  ;
-
-  int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
-
-  if (rc != SQLITE_OK)
-  {
-    fprintf(stderr, "Prepare failed: %s\n", sqlite3_errmsg(db));
-  }
-
-  sqlite3_bind_text(stmt, 1, highlight.book.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int(stmt, 2, highlight.chapter);
-  sqlite3_bind_int(stmt, 3, highlight.verse);
-  sqlite3_bind_int(stmt, 4, highlight.start_index);
-  sqlite3_bind_int(stmt, 5, highlight.end_index);
-  sqlite3_bind_int(stmt, 6, highlight.color);
-
-  rc = sqlite3_step(stmt);
-
-  if (rc != SQLITE_DONE)
-  {
-    fprintf(stderr, "Insert failed: %s\n", sqlite3_errmsg(db));
-  }
-
-  sqlite3_finalize(stmt);
-  stmt = nullptr;
+  sqlite3_bind_text(stmt, 1, h.book.c_str(), -1, SQLITE_TRANSIENT);
+  sqlite3_bind_int(stmt, 2, h.chapter);
+  sqlite3_bind_int(stmt, 3, h.verse);
+  sqlite3_bind_int(stmt, 4, h.start_index);
+  sqlite3_bind_int(stmt, 5, h.end_index);
+  sqlite3_bind_int(stmt, 6, static_cast<int>(h.color));
 }
 
-void HighlightDB::remove(const Highlight &highlight)
+void HighlightDB::save(const Highlight &h)
 {
-  sqlite3_finalize(stmt);
-  stmt = nullptr;
-
-  const char *sql =
-    "DELETE FROM Highlights"
-    "WHERE book = ? "
-    "AND chapter = ? "
-    "AND verse = ? "
-    "AND start_index = ? "
-    "AND end_index = ? "
-    "AND color = ?;"
-  ;
-
-  int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
-
-  if (rc != SQLITE_OK)
+  error.clear();
+  if (h.book.empty() || h.chapter < 1 || h.verse < 1 || h.start_index < 0 || h.end_index <= h.start_index || static_cast<int>(h.color) < 0 || static_cast<int>(h.color) > 8)
   {
-    fprintf(stderr, "Prepare failed: %s\n", sqlite3_errmsg(db));
+    error = "Invalid highlight range or color."; return;
   }
-
-  sqlite3_bind_text(stmt, 1, highlight.book.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int(stmt, 2, highlight.chapter);
-  sqlite3_bind_int(stmt, 3, highlight.verse);
-  sqlite3_bind_int(stmt, 4, highlight.start_index);
-  sqlite3_bind_int(stmt, 5, highlight.end_index);
-  sqlite3_bind_int(stmt, 6, highlight.color);
-
-  rc = sqlite3_step(stmt);
-
-  if (rc != SQLITE_DONE)
+  const char *sql = "INSERT INTO Highlights (book, chapter, verse, start_index, end_index, color) SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Highlights WHERE book=?1 AND chapter=?2 AND verse=?3 AND start_index=?4 AND end_index=?5 AND color=?6);";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK)
   {
-    fprintf(stderr, "Insert failed: %s\n", sqlite3_errmsg(db));
+    bindHighlight(stmt, h);
+    if (sqlite3_step(stmt) != SQLITE_DONE)
+    {
+      error = sqlite3_errmsg(db);
+    }
   }
-
-  sqlite3_finalize(stmt);
-  stmt = nullptr;
+  else 
+  {
+    error = sqlite3_errmsg(db);
+  }
+  sqlite3_finalize(stmt); stmt = nullptr;
 }
 
-void HighlightDB::load(const Highlight &highlight)
+void HighlightDB::remove(const Highlight &h)
 {
+  error.clear();
+  const char *sql = "DELETE FROM Highlights WHERE book=? AND chapter=? AND verse=? AND start_index=? AND end_index=? AND color=?;";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK)
+  {
+    bindHighlight(stmt, h);
+    if (sqlite3_step(stmt) != SQLITE_DONE) error = sqlite3_errmsg(db);
+  }
+  else
+  {
+    error = sqlite3_errmsg(db);
+  }
+  sqlite3_finalize(stmt); stmt = nullptr;
+}
+
+std::vector<Highlight> HighlightDB::listAll()
+{
+  error.clear();
+  std::vector<Highlight> result;
+  const char *sql = "SELECT book, chapter, verse, start_index, end_index, color FROM Highlights ORDER BY id;";
+  if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK)
+  {
+    int status;
+    while ((status = sqlite3_step(stmt)) == SQLITE_ROW)
+    {
+      result.push_back({reinterpret_cast<const char *>(sqlite3_column_text(stmt, 0)), sqlite3_column_int(stmt, 1), sqlite3_column_int(stmt, 2), sqlite3_column_int(stmt, 3), sqlite3_column_int(stmt, 4), static_cast<HighlightColors>(sqlite3_column_int(stmt, 5))});
+    }
+    if (status != SQLITE_DONE)
+    {
+      error = sqlite3_errmsg(db); result.clear();
+    }
+  }
+  else
+  {
+    error = sqlite3_errmsg(db);
+  }
+  sqlite3_finalize(stmt); stmt = nullptr;
+  return result;
+}
+
+std::vector<Highlight> HighlightDB::sortByColor(HighlightColors color)
+{
+  auto result = listAll();
+  result.erase(std::remove_if(result.begin(), result.end(), [color](const Highlight &h) { return h.color != color; }), result.end());
+  return result;
+}
+
+void HighlightDB::load(const Highlight &h)
+{
+  auto all = listAll();
   count = 0;
-  sqlite3_finalize(stmt);
-  stmt = nullptr;
-
-  const char *sql =
-    "SELECT * FROM Highlights"
-    "WHERE book = ? "
-    "AND chapter = ? "
-    "AND verse = ? "
-    "AND start_index = ? "
-    "AND end_index = ? "
-    "AND color = ?;"
-  ;
-
-  if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK)
+  for (const auto &value : all)
   {
-    error = sqlite3_errmsg(db);
-    return;
+    if (value.book == h.book && value.chapter == h.chapter && value.verse == h.verse && value.start_index == h.start_index && value.end_index == h.end_index && value.color == h.color)
+    {
+      highlight = value; ++count;
+    }
   }
-
-  int count_local = 0;
-  sqlite3_bind_text(stmt, 1, highlight.book.c_str(), -1, SQLITE_TRANSIENT);
-  sqlite3_bind_int(stmt, 2, highlight.chapter);
-  sqlite3_bind_int(stmt, 3, highlight.verse);
-  sqlite3_bind_int(stmt, 4, highlight.start_index);
-  sqlite3_bind_int(stmt, 5, highlight.end_index);
-  sqlite3_bind_int(stmt, 6, highlight.color);
-
-  // Read all matching rows
-  int result;
-  while ((result = sqlite3_step(stmt)) == SQLITE_ROW)
-  {
-    const char *book = (const char *)sqlite3_column_text(stmt, 0);
-    int chapter = (int)sqlite3_column_int(stmt, 1);
-    int verse = (int)sqlite3_column_int(stmt, 2);
-    int start_index = (int)sqlite3_column_int(stmt, 3);
-    int end_index = (int)sqlite3_column_int(stmt, 4);
-    int color = (int)sqlite3_column_int(stmt, 5);
-
-    count_local++;
-  }
-  count = count_local;
-
-  if (result != SQLITE_DONE)
-  {
-    error = sqlite3_errmsg(db);
-    count = 0;
-  }
-  sqlite3_finalize(stmt);
-  stmt = nullptr;
 }

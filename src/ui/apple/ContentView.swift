@@ -22,12 +22,43 @@ import CoreServices
 import UIKit
 #endif
 
+private enum ReaderStyle {
+  static func adaptive(light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
+    #if os(macOS)
+      Color(nsColor: NSColor(name: nil) { appearance in
+        let rgb = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+      })
+    #else
+      Color(uiColor: UIColor { traits in
+        let rgb = traits.userInterfaceStyle == .dark ? dark : light
+        return UIColor(red: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
+      })
+    #endif
+  }
+  static let canvas = adaptive(light: (0.92, 0.92, 0.92), dark: (0.11, 0.11, 0.11))
+  static let paper = adaptive(light: (0.98, 0.98, 0.98), dark: (0.17, 0.17, 0.17))
+  static let panel = adaptive(light: (0.96, 0.96, 0.96), dark: (0.15, 0.15, 0.15))
+  static let accent = adaptive(light: (0.36, 0.36, 0.36), dark: (0.73, 0.73, 0.73))
+  static let border = Color.primary.opacity(0.09)
+  static let gap: CGFloat = 12
+  static let radius: CGFloat = 14
+}
+
 struct ContentView: View {
+    @StateObject private var highlightStore = HighlightStore()
+
     @AppStorage("lastReadBook") private var lastReadBook = "John"
     @AppStorage("lastReadChapter") private var lastReadChapter = 1
+    @AppStorage("showNotes") private var showNotes = true
+    @AppStorage("readingFontSize") private var fontSize = 21.0
+    @AppStorage("showRedLetters") private var showRedLetters = true
+    @AppStorage("showItalics") private var showItalics = true
+
     @State private var book = "John"
     @State private var chapter = 1
     @State private var catalog: [String: Int] = [:]
+    @State private var orderedBooks: [String] = []
     @State private var verses: [ReaderVerse] = []
     @State private var matches: [ReaderVerse] = []
     @State private var targetVerse: Int?
@@ -36,16 +67,15 @@ struct ContentView: View {
     @State private var searchError: String?
     @State private var searching = false
     @State private var search = ""
-    @State private var showNotes = true
     @State private var showDictionary = false
     @State private var lookupWord = ""
-    @AppStorage("readingFontSize") private var fontSize = 21.0
-    @AppStorage("showRedLetters") private var showRedLetters = true
-    @AppStorage("showItalics") private var showItalics = true
+
     @FocusState private var searchFocused: Bool
-    private let accent = Color(red: 0.29, green: 0.43, blue: 0.37)
+
+    private let accent = ReaderStyle.accent
     private var passageID: String { "\(book) \(chapter)" }
     private var targetRange: NSRange {
+        guard let targetVerse else { return NSRange(location: 0, length: 0) }
         var offset = 0
         for verse in verses {
             let line = "\(verse.number)  \(verse.text)"
@@ -57,39 +87,37 @@ struct ContentView: View {
     private var query: String { search.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
-        VStack(spacing: 0) {
+        let notesVisible = showNotes
+        return VStack(spacing: ReaderStyle.gap) {
             header
-            Divider()
             GeometryReader { geometry in
                 if geometry.size.width < 640 {
-                    VStack(spacing: 0) {
+                    VStack(spacing: ReaderStyle.gap) {
                         reader
-                        if showNotes {
-                            Divider()
-                            NotesPane(passageID: passageID).frame(height: geometry.size.height * 0.36)
+                        if notesVisible {
+                            NotesPane(passageID: passageID).id(passageID).frame(height: geometry.size.height * 0.36)
                         }
                     }
                 } else {
                     #if os(macOS)
-                    HSplitView {
-                        reader.frame(minWidth: 360)
-                        if showNotes { NotesPane(passageID: passageID).frame(minWidth: 220, idealWidth: 290, maxWidth: 440) }
-                    }
+                    ReadingSplitView(reading: reader, notes: NotesPane(passageID: passageID).id(passageID), showNotes: notesVisible)
                     #else
-                    HStack(spacing: 0) {
+                    HStack(spacing: ReaderStyle.gap) {
                         reader
-                        if showNotes {
-                            Divider()
-                            NotesPane(passageID: passageID).frame(width: 280)
+                        if notesVisible {
+                            NotesPane(passageID: passageID).id(passageID).frame(width: 280)
                         }
                     }
                     #endif
                 }
             }
         }
+        .padding(ReaderStyle.gap)
+        .background(ReaderStyle.canvas)
         .task {
             do {
                 catalog = try BibleBridge.books(atPath: BibleReader.path()).mapValues { $0.intValue }
+                orderedBooks = BibleBridge.bookNames().filter { catalog[$0] != nil }
                 book = catalog[lastReadBook] != nil ? lastReadBook : "John"
                 chapter = min(max(lastReadChapter, 1), catalog[book] ?? 1)
                 loadChapter()
@@ -103,40 +131,98 @@ struct ContentView: View {
         #if os(macOS)
         .frame(minWidth: 580, minHeight: 420)
         #endif
+        .alert("Highlight could not be saved or loaded", isPresented: Binding(get: { highlightStore.error != nil }, set: { if !$0 { highlightStore.error = nil } })) {
+            Button("OK") { highlightStore.error = nil }
+        } message: { Text(highlightStore.error ?? "") }
         .sheet(isPresented: $showDictionary) { DictionaryPopup(word: $lookupWord) }
     }
 
     private var header: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 18) { brand; passagePicker; Spacer(); searchField; options }
+            HStack(spacing: 18) {
+                brand
+                passagePicker
+                Spacer(minLength: 12)
+                searchField.frame(width: 320)
+                options
+            }
             VStack(spacing: 12) {
                 HStack { brand; Spacer(); options }
-                HStack { passagePicker; searchField }
+                HStack(spacing: 16) {
+                    passagePicker
+                    searchField.frame(maxWidth: .infinity)
+                }
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack { brand; Spacer(); options }
+                passagePicker
+                searchField.frame(maxWidth: .infinity)
             }
         }
-        .padding(16)
-        .background(.bar)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 14)
+        .background(ReaderStyle.panel)
+        .clipShape(RoundedRectangle(cornerRadius: ReaderStyle.radius))
+        .overlay(RoundedRectangle(cornerRadius: ReaderStyle.radius).strokeBorder(ReaderStyle.border))
     }
     private var brand: some View {
-        Label("Bible", systemImage: "book.closed").font(.title3.weight(.semibold)).foregroundStyle(accent)
+        Label {
+            Text("Bible Viewer")
+        } icon: {
+            Image(systemName: "book.closed")
+                .foregroundStyle(ReaderStyle.adaptive(light: (0.25, 0.40, 0.33), dark: (0.61, 0.77, 0.66)))
+        }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(accent)
+            .fixedSize()
     }
     private var passagePicker: some View {
         HStack(spacing: 8) {
-            Picker("Book", selection: Binding(get: { book }, set: { value in
-                book = value; chapter = 1; search = ""; targetVerse = nil; loadChapter()
-            })) {
-                ForEach(orderedBooks, id: \.self) { Text($0).tag($0) }
-            }.labelsHidden().frame(width: 155).accessibilityLabel("Book")
-            Picker("Chapter", selection: Binding(get: { chapter }, set: { value in
-                chapter = value; search = ""; targetVerse = nil; loadChapter()
-            })) {
-                ForEach(1...max(catalog[book] ?? 1, 1), id: \.self) { Text("\($0)").tag($0) }
-            }.frame(width: 105)
+            Menu {
+                Picker("Book", selection: Binding(get: { book }, set: { value in
+                    book = value; chapter = 1; search = ""; targetVerse = nil; loadChapter()
+                })) {
+                    ForEach(orderedBooks, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                passageMenuLabel(book, width: 148)
+            }
+            .accessibilityLabel("Book")
+            .accessibilityValue(book)
+            Menu {
+                Picker("Chapter", selection: Binding(get: { chapter }, set: { value in
+                    chapter = value; search = ""; targetVerse = nil; loadChapter()
+                })) {
+                    ForEach(1...max(catalog[book] ?? 1, 1), id: \.self) { Text("\($0)").tag($0) }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                passageMenuLabel("\(chapter)", width: 64)
+            }
+            .accessibilityLabel("Chapter")
+            .accessibilityValue("\(chapter)")
         }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: true, vertical: false)
     }
-    private var orderedBooks: [String] {
-        // Canonical order comes from the core's book index mapping.
-        BibleBridge.bookNames().filter { catalog[$0] != nil }
+
+    private func passageMenuLabel(_ title: String, width: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            Text(title).lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 12)
+        .frame(width: width, height: 42)
+        .background(ReaderStyle.paper, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderStyle.border))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
     }
     private var searchField: some View {
         HStack(spacing: 6) {
@@ -147,7 +233,13 @@ struct ContentView: View {
                 Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
-        }.padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 8)).frame(maxWidth: 250)
+        }
+        .font(.system(size: 14))
+        .padding(.horizontal, 12)
+        .frame(minWidth: 220, minHeight: 42)
+        .background(ReaderStyle.paper, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(searchFocused ? accent.opacity(0.7) : ReaderStyle.border))
+        .accessibilityLabel("Search the Bible")
     }
     private var options: some View {
         Menu {
@@ -160,39 +252,63 @@ struct ContentView: View {
             Divider()
             Button("Larger Text") { fontSize = min(fontSize + 2, 32) }.disabled(fontSize >= 32)
             Button("Smaller Text") { fontSize = max(fontSize - 2, 14) }.disabled(fontSize <= 14)
-        } label: { Image(systemName: "line.3.horizontal") }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(accent)
+                .frame(width: 38, height: 42)
+                .background(ReaderStyle.paper, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(ReaderStyle.border))
+        }
         .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Reading options")
     }
     private var reader: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(query.isEmpty ? passageID : "Search results").font(.system(size: 28, weight: .medium, design: .serif))
-                    Text("KING JAMES VERSION").font(.caption2.weight(.semibold)).tracking(1.4).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }.padding(28)
+            bookHeader
+            Divider().padding(.horizontal, 28)
+
             if let loadingError {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Unable to load passages").font(.headline)
                     Text(loadingError).foregroundStyle(.secondary)
-                }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                    .padding(28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else if verses.isEmpty {
-                ProgressView("Loading passages…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("Loading passages…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if query.isEmpty {
-                ScriptureText(verses: verses, fontSize: fontSize, redLetters: showRedLetters, italics: showItalics, targetRange: targetRange) { word in
+                ScriptureText(verses: verses, fontSize: fontSize, redLetters: showRedLetters, italics: showItalics, targetRange: targetRange, highlights: highlightStore.highlights, onHighlight: {
+                     range, color in
+                     highlightStore.update(selection: range, verses: verses, color: color)
+                }) {
+                    word in
                     lookupWord = word
                     showDictionary = true
-                }.id("\(passageID):\(targetVerse ?? 0):\(formattingRevision)")
+                }
+                    .id("\(passageID):\(targetVerse ?? 0):\(formattingRevision)")
             } else {
                 searchResults
             }
-            Divider()
-            HStack {
-                Image(systemName: "text.book.closed")
-                Text("Select a word to look it up, or open Dictionary from the menu.")
-            }.font(.caption).foregroundStyle(.secondary).padding(12)
-        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ReaderStyle.paper)
+        .clipShape(RoundedRectangle(cornerRadius: ReaderStyle.radius))
+        .overlay(RoundedRectangle(cornerRadius: ReaderStyle.radius).strokeBorder(ReaderStyle.border))
+    }
+    private var bookHeader: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(query.isEmpty ? passageID : "Search results")
+                    .font(.system(size: 28, weight: .medium, design: .serif))
+                Text("KING JAMES VERSION")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(1.8).foregroundStyle(accent)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 24)
     }
     private var searchResults: some View {
         ScrollView {
@@ -211,7 +327,7 @@ struct ContentView: View {
                     }
                     if matches.isEmpty { Text("No matching verses. Try another word or phrase.").foregroundStyle(.secondary) }
                 }
-            }.padding(.horizontal, 28).padding(.bottom, 24)
+            }.padding(.horizontal, 28).padding(.vertical, 24)
         }.id("\(query):\(formattingRevision)")
     }
 
@@ -292,25 +408,42 @@ private struct NotesPane: View {
         _notes = AppStorage(wrappedValue: "", "notes.\(passageID)")
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Notes", systemImage: "square.and.pencil").font(.headline)
-            Text(passageID).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Notes", systemImage: "square.and.pencil")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ReaderStyle.accent)
+                Spacer()
+            }
+            Text(passageID).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+            Divider()
             ZStack(alignment: .topLeading) {
-                TextEditor(text: $notes).font(.body).scrollContentBackground(.hidden).accessibilityLabel("Notes for \(passageID)")
+                #if os(macOS)
+                NotesEditor(text: $notes)
+                    .accessibilityLabel("Notes for \(passageID)")
+                #else
+                TextEditor(text: $notes).font(.body).scrollContentBackground(.hidden)
+                    .accessibilityLabel("Notes for \(passageID)")
+                #endif
                 if notes.isEmpty {
-                    Text("Write your thoughts, questions,\nor a verse to remember…")
+                    Text("Write your thoughts.")
                         .font(.body)
-                        .foregroundStyle(.tertiary)
-                        // macOS TextEditor starts at the top; UIKit adds an 8pt inset.
-                        #if !os(macOS)
+                        .foregroundStyle(.secondary.opacity(0.7))
                         .padding(.top, 8)
-                        #endif
-                        .padding(.leading, 5)
+                        .padding(.horizontal, 5)
                         .allowsHitTesting(false)
                 }
             }
-            Text("Saved automatically on this device").font(.caption2).foregroundStyle(.secondary)
-        }.padding(20).background(.quaternary.opacity(0.3))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+//            Text("Saved automatically on this device")
+//                .font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ReaderStyle.panel)
+        .clipShape(RoundedRectangle(cornerRadius: ReaderStyle.radius))
+        .overlay(RoundedRectangle(cornerRadius: ReaderStyle.radius).strokeBorder(ReaderStyle.border))
     }
 }
 
@@ -354,13 +487,155 @@ private struct DictionaryPopup: View {
 }
 
 #if os(macOS)
+// AppKit owns divider tracking and child frames. A drag must not mutate the
+// main SwiftUI view's state or rebuild its menus on every mouse movement.
+struct ReadingSplitView<Reading: View, Notes: View>: NSViewRepresentable {
+    let reading: Reading
+    let notes: Notes
+    var showNotes = true
+
+    final class Coordinator: NSObject, NSSplitViewDelegate {
+        let readingHost: NSHostingView<Reading>
+        let notesHost: NSHostingView<Notes>
+        init(_ parent: ReadingSplitView) {
+            readingHost = NSHostingView(rootView: parent.reading)
+            notesHost = NSHostingView(rootView: parent.notes)
+            super.init()
+            // The split view provides the frames; hosted text must not feed
+            // its document's intrinsic size back into the split layout.
+            readingHost.sizingOptions = []
+            notesHost.sizingOptions = []
+        }
+        func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+            max(360, splitView.bounds.width - 440 - splitView.dividerThickness)
+        }
+        func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+            splitView.bounds.width - 220 - splitView.dividerThickness
+        }
+        func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+        func splitView(_ splitView: NSSplitView, shouldHideDividerAt dividerIndex: Int) -> Bool {
+            splitView.subviews.last?.isHidden == true
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSSplitView {
+        let split = ReaderPaneSplitView()
+        split.isVertical = true
+        split.delegate = context.coordinator
+        split.addArrangedSubview(context.coordinator.readingHost)
+        split.addArrangedSubview(context.coordinator.notesHost)
+        return split
+    }
+    func updateNSView(_ split: NSSplitView, context: Context) {
+        context.coordinator.readingHost.rootView = reading
+        context.coordinator.notesHost.rootView = notes
+        (split as? ReaderPaneSplitView)?.setNotesVisible(showNotes)
+    }
+}
+
+private final class ReaderPaneSplitView: NSSplitView {
+    private var notesVisible = true
+    private var savedNotesWidth: CGFloat = 300
+    override var dividerThickness: CGFloat { notesVisible ? ReaderStyle.gap : 0 }
+
+    func setNotesVisible(_ visible: Bool) {
+        guard visible != notesVisible, subviews.count == 2 else { return }
+        if !visible { savedNotesWidth = subviews[1].frame.width }
+        notesVisible = visible
+        subviews[1].isHidden = !visible
+        if visible {
+            var frame = subviews[1].frame
+            frame.size.width = savedNotesWidth
+            subviews[1].frame = frame
+        }
+        resizeSubviews(withOldSize: bounds.size)
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+    override func drawDivider(in rect: NSRect) {
+        NSColor(ReaderStyle.canvas).setFill()
+        rect.fill()
+    }
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        guard subviews.count == 2, bounds.width > dividerThickness else { return }
+        guard notesVisible else {
+            subviews[0].frame = bounds
+            return
+        }
+        let availableWidth = bounds.width - dividerThickness
+        let maximumNotesWidth = min(440, max(0, availableWidth - 360))
+        let minimumNotesWidth = min(220, maximumNotesWidth)
+        let previousNotesWidth = subviews[1].frame.width
+        let notesWidth = min(max(previousNotesWidth > 0 ? previousNotesWidth : 300, minimumNotesWidth), maximumNotesWidth)
+        let readingWidth = availableWidth - notesWidth
+        subviews[0].frame = NSRect(x: 0, y: 0, width: readingWidth, height: bounds.height)
+        subviews[1].frame = NSRect(x: readingWidth + dividerThickness, y: 0, width: notesWidth, height: bounds.height)
+    }
+}
+
+// Overlay scrollers avoid reserving a bright gutter inside the reading cards.
+private func configureReaderScrollView(_ scroll: NSScrollView) {
+    scroll.hasVerticalScroller = true
+    scroll.hasHorizontalScroller = false
+    scroll.autohidesScrollers = true
+    scroll.scrollerStyle = .overlay
+    scroll.borderType = .noBorder
+    scroll.drawsBackground = false
+}
+
+private struct NotesEditor: NSViewRepresentable {
+    @Binding var text: String
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: NotesEditor
+        init(_ parent: NotesEditor) { self.parent = parent }
+        func textDidChange(_ notification: Notification) {
+            guard let editor = notification.object as? NSTextView else { return }
+            parent.text = editor.string
+        }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        let editor = NSTextView()
+        editor.font = .systemFont(ofSize: 14)
+        editor.textColor = .labelColor
+        editor.insertionPointColor = .labelColor
+        editor.isRichText = false
+        editor.allowsUndo = true
+        editor.drawsBackground = false
+        editor.textContainerInset = NSSize(width: 0, height: 8)
+        editor.isVerticallyResizable = true
+        editor.isHorizontallyResizable = false
+        editor.autoresizingMask = [.width]
+        editor.textContainer?.widthTracksTextView = true
+        editor.delegate = context.coordinator
+        scroll.documentView = editor
+        configureReaderScrollView(scroll)
+        return scroll
+    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let editor = scroll.documentView as? NSTextView else { return }
+        if editor.string != text {
+            editor.string = text
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+            scroll.contentView.scroll(to: .zero)
+        }
+    }
+}
+
 struct ScriptureText: NSViewRepresentable {
     let verses: [ReaderVerse]
     let fontSize: Double
     let redLetters: Bool
     let italics: Bool
     let targetRange: NSRange
+    var highlights: [StoredHighlight] = []
+    var onHighlight: ((NSRange, Int?) -> Void)? = nil
     let onLookup: (String) -> Void
+    final class Coordinator { let rendering = ScriptureRenderCache() }
+    func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView()
         let view = LookupTextView()
@@ -373,15 +648,14 @@ struct ScriptureText: NSViewRepresentable {
         view.autoresizingMask = [.width]
         view.textContainer?.widthTracksTextView = true
         scroll.documentView = view
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
+        configureReaderScrollView(scroll)
         return scroll
     }
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? LookupTextView else { return }
         view.onLookup = onLookup
-        let attributedText = ScriptureFormatting.chapter(verses, fontSize: fontSize, redLetters: redLetters, italics: italics)
-        if view.textStorage?.isEqual(to: attributedText) != true {
+        view.onHighlight = onHighlight
+        if let attributedText = context.coordinator.rendering.updatedChapter(verses, fontSize: fontSize, redLetters: redLetters, italics: italics, highlights: highlights) {
             let selection = view.selectedRange()
             view.textStorage?.setAttributedString(attributedText)
             if NSMaxRange(selection) <= attributedText.length { view.setSelectedRange(selection) }
@@ -397,6 +671,7 @@ struct ScriptureText: NSViewRepresentable {
 
 private final class LookupTextView: NSTextView {
     var onLookup: ((String) -> Void)?
+    var onHighlight: ((NSRange, Int?) -> Void)?
     var navigationRange: NSRange?
     var pendingNavigationRange: NSRange?
     override func layout() {
@@ -418,17 +693,42 @@ private final class LookupTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let index = characterIndexForInsertion(at: point)
-        if index < (string as NSString).length {
+        if index < (string as NSString).length && !NSLocationInRange(index, selectedRange()) {
             let range = selectionRange(forProposedRange: NSRange(location: index, length: 0), granularity: .selectByWord)
             setSelectedRange(range)
         }
         let menu = super.menu(for: event) ?? NSMenu()
         if selectedRange().length > 0 {
+            if onHighlight != nil {
+                let highlight = NSMenuItem(title: "Highlight", action: nil, keyEquivalent: "")
+                let colors = NSMenu()
+                for (index, name) in HighlightStore.colorNames.enumerated() {
+                    let color = NSMenuItem(title: name, action: #selector(highlightSelection(_:)), keyEquivalent: "")
+                    color.tag = index
+                    color.target = self
+                    colors.addItem(color)
+                }
+                highlight.submenu = colors
+                menu.insertItem(highlight, at: 0)
+                let remove = NSMenuItem(title: "Remove Highlight", action: #selector(removeHighlight), keyEquivalent: "")
+                remove.target = self
+                menu.insertItem(remove, at: 1)
+            }
             let item = NSMenuItem(title: "Look Up in Dictionary", action: #selector(lookupSelection), keyEquivalent: "")
             item.target = self
             menu.insertItem(item, at: 0)
         }
         return menu
+    }
+    @objc private func highlightSelection(_ sender: NSMenuItem) {
+        let range = selectedRange()
+        onHighlight?(range, sender.tag)
+        setSelectedRange(NSRange(location: range.location, length: 0))
+    }
+    @objc private func removeHighlight() {
+        let range = selectedRange()
+        onHighlight?(range, nil)
+        setSelectedRange(NSRange(location: range.location, length: 0))
     }
     @objc private func lookupSelection() {
         let selection = (string as NSString).substring(with: selectedRange()).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -442,8 +742,13 @@ struct ScriptureText: UIViewRepresentable {
     let redLetters: Bool
     let italics: Bool
     let targetRange: NSRange
+    var highlights: [StoredHighlight] = []
+    var onHighlight: ((NSRange, Int?) -> Void)? = nil
     let onLookup: (String) -> Void
-    final class Coordinator { var navigationRange: NSRange? }
+    final class Coordinator {
+        var navigationRange: NSRange?
+        let rendering = ScriptureRenderCache()
+    }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UITextView {
         let view = NavigatingTextView()
@@ -453,8 +758,7 @@ struct ScriptureText: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: UITextView, context: Context) {
-        let attributedText = ScriptureFormatting.chapter(verses, fontSize: fontSize, redLetters: redLetters, italics: italics)
-        if !view.attributedText.isEqual(to: attributedText) {
+        if let attributedText = context.coordinator.rendering.updatedChapter(verses, fontSize: fontSize, redLetters: redLetters, italics: italics, highlights: highlights) {
             let selection = view.selectedRange
             view.attributedText = attributedText
             if NSMaxRange(selection) <= attributedText.length { view.selectedRange = selection }

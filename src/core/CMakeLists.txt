@@ -3,6 +3,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(bible_core STATIC
   "bible.cpp"
+  "highlight.cpp"
   "util.cpp"
   "${CMAKE_SOURCE_DIR}/external/sqlite/sqlite3.c"
 )

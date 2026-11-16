@@ -22,7 +22,7 @@ import UIKit
 #endif
 
 enum ScriptureFormatting {
-    static func chapter(_ verses: [ReaderVerse], fontSize: Double, redLetters: Bool, italics: Bool) -> NSAttributedString {
+    static func chapter(_ verses: [ReaderVerse], fontSize: Double, redLetters: Bool, italics: Bool, highlights: [StoredHighlight] = []) -> NSAttributedString {
         #if os(macOS)
         let font = NSFont(name: "Georgia", size: fontSize) ?? NSFont.systemFont(ofSize: fontSize)
         let italicFont = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
@@ -41,11 +41,21 @@ enum ScriptureFormatting {
         for (index, verse) in verses.enumerated() {
             if index > 0 { result.append(NSAttributedString(string: "\n\n", attributes: base)) }
             result.append(NSAttributedString(string: "\(verse.number)  ", attributes: base))
+            let verseStart = result.length
             for piece in verse.pieces {
                 var attributes = base
                 if redLetters && piece.red { attributes[.foregroundColor] = red }
                 if italics && piece.italic { attributes[.font] = italicFont }
                 result.append(NSAttributedString(string: piece.text, attributes: attributes))
+            }
+            #if os(macOS)
+            let colors: [NSColor] = [.systemRed, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple, .systemIndigo, .systemGray, .black]
+            #else
+            let colors: [UIColor] = [.systemRed, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple, .systemIndigo, .systemGray, .black]
+            #endif
+            for highlight in highlights where highlight.book == verse.book && highlight.chapter == verse.chapter && highlight.verse == verse.number {
+                guard highlight.start >= 0, highlight.end > highlight.start, highlight.end <= (verse.text as NSString).length, colors.indices.contains(highlight.color) else { continue }
+                result.addAttribute(.backgroundColor, value: colors[highlight.color].withAlphaComponent(0.30), range: NSRange(location: verseStart + highlight.start, length: highlight.end - highlight.start))
             }
         }
         return result
@@ -57,5 +67,25 @@ enum ScriptureFormatting {
             if italics && piece.italic { text = text.italic() }
             return result + text
         }
+    }
+}
+
+// Formatting depends on content and reading settings, never viewport size.
+// Return nil on layout-only updates so native text storage stays untouched.
+final class ScriptureRenderCache {
+    private struct Input: Equatable {
+        let verses: [ReaderVerse]
+        let fontSize: Double
+        let redLetters: Bool
+        let italics: Bool
+        let highlights: [StoredHighlight]
+    }
+    private var previous: Input?
+
+    func updatedChapter(_ verses: [ReaderVerse], fontSize: Double, redLetters: Bool, italics: Bool, highlights: [StoredHighlight] = []) -> NSAttributedString? {
+        let input = Input(verses: verses, fontSize: fontSize, redLetters: redLetters, italics: italics, highlights: highlights)
+        guard input != previous else { return nil }
+        previous = input
+        return ScriptureFormatting.chapter(verses, fontSize: fontSize, redLetters: redLetters, italics: italics, highlights: highlights)
     }
 }

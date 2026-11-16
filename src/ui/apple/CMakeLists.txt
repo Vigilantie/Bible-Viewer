@@ -4,6 +4,7 @@ add_executable(${PROJECT_NAME} MACOSX_BUNDLE
   Bible_Viewer_WindowApp.swift
   ContentView.swift
   BibleReader.swift
+  HighlightStore.swift
   ScriptureFormatting.swift
   BibleBridge.mm
   BibleBridge.h

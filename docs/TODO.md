@@ -5,6 +5,7 @@ Add searching notes
 Add Strongs dictionary
 Add comantary Bibles
 Add more translations
+Add comma seperated searching.
 
 ## UI
 Make a UI for other platforms.

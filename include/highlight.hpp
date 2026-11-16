@@ -21,7 +21,7 @@
 
 #include <sqlite3.h>
 
-enum HighlightColors
+enum class HighlightColors
 {
   RED,
   ORANGE,
@@ -39,6 +39,7 @@ struct Highlight
   std::string book;
   int chapter;
   int verse;
+  // Half-open UTF-16 offsets into plain verse text (excluding verse number).
   int start_index;
   int end_index;
   HighlightColors color;
@@ -49,6 +50,9 @@ class HighlightDB
 public:
   HighlightDB(std::string db_path);
   ~HighlightDB();
+  HighlightDB(const HighlightDB&) = delete;
+  HighlightDB& operator=(const HighlightDB&) = delete;
+  const std::string& lastError() const { return error; }
 
   // Use when loading the chapter
   void load(const Highlight &highlight);

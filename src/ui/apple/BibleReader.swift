@@ -16,13 +16,13 @@
 
 import Foundation
 
-struct ReaderPiece: Sendable {
+struct ReaderPiece: Equatable, Sendable {
     let text: String
     let red: Bool
     let italic: Bool
 }
 
-struct ReaderVerse: Identifiable, Sendable {
+struct ReaderVerse: Identifiable, Equatable, Sendable {
     let book: String
     let chapter: Int
     let number: Int

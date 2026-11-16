@@ -16,6 +16,7 @@
 
 #import "BibleBridge.h"
 #include "bible.hpp"
+#include "highlight.hpp"
 #include "util.hpp"
 #include <stdexcept>
 
@@ -55,6 +56,30 @@
 @end
 
 @implementation BibleBridge
++ (NSArray<NSDictionary *> *)highlightsAtPath:(NSString *)path error:(NSError **)error {
+    HighlightDB db(path.fileSystemRepresentation);
+    if (db.lastError().empty()) {
+        auto highlights = db.listAll();
+        if (db.lastError().empty()) {
+            NSMutableArray *result = [NSMutableArray array];
+            for (const auto &h : highlights) [result addObject:@{@"book": [NSString stringWithUTF8String:h.book.c_str()], @"chapter": @(h.chapter), @"verse": @(h.verse), @"start": @(h.start_index), @"end": @(h.end_index), @"color": @(static_cast<int>(h.color))}];
+            return result;
+        }
+    }
+    if (error) *error = [NSError errorWithDomain:@"BibleHighlights" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:db.lastError().c_str()]}];
+    return nil;
+}
++ (BOOL)writeHighlightAtPath:(NSString *)path book:(NSString *)book chapter:(NSInteger)chapter verse:(NSInteger)verse start:(NSInteger)start end:(NSInteger)end color:(NSInteger)color remove:(BOOL)remove error:(NSError **)error {
+    HighlightDB db(path.fileSystemRepresentation);
+    if (db.lastError().empty()) {
+        Highlight h{book.UTF8String, (int)chapter, (int)verse, (int)start, (int)end, static_cast<HighlightColors>(color)};
+        if (remove) db.remove(h); else db.save(h);
+    }
+    if (db.lastError().empty()) return YES;
+    if (error) *error = [NSError errorWithDomain:@"BibleHighlights" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:db.lastError().c_str()]}];
+    return NO;
+}
+
 + (NSArray<NSString *> *)bookNames {
     NSMutableArray *names = [NSMutableArray array];
     for (int i = 1; i <= 66; ++i) [names addObject:[NSString stringWithUTF8String:indexToBook(i).c_str()]];

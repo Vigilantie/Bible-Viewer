@@ -34,6 +34,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Copies bible_core results into values owned by Swift/Foundation.
 @interface BibleBridge : NSObject
++ (nullable NSArray<NSDictionary *> *)highlightsAtPath:(NSString *)path error:(NSError **)error;
++ (BOOL)writeHighlightAtPath:(NSString *)path book:(NSString *)book chapter:(NSInteger)chapter verse:(NSInteger)verse start:(NSInteger)start end:(NSInteger)end color:(NSInteger)color remove:(BOOL)remove error:(NSError **)error;
 + (nullable NSDictionary<NSString *, NSNumber *> *)booksAtPath:(NSString *)path error:(NSError **)error;
 + (NSArray<NSString *> *)bookNames;
 + (NSString *)canonicalBook:(NSString *)book;
